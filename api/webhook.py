@@ -1,81 +1,63 @@
-import json
-import os
+from flask import Flask, request, jsonify
 import requests
+import os
 
-from http.server import BaseHTTPRequestHandler
-
+app = Flask(__name__)
 
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET")
 
 
-class handler(BaseHTTPRequestHandler):
+@app.route("/api/webhook", methods=["POST"])
+def webhook():
 
-    def do_POST(self):
+    try:
 
-        try:
+        payload = request.get_json(force=True)
 
-            content_length = int(
-                self.headers.get("Content-Length", 0)
-            )
+        if payload.get("secret") != WEBHOOK_SECRET:
+            return jsonify({
+                "status": "forbidden"
+            }), 403
 
-            body = self.rfile.read(content_length)
+        symbol = payload.get("symbol", "")
+        side = payload.get("side", "")
+        entry = payload.get("entry", "")
+        sl = payload.get("sl", "")
+        tp = payload.get("tp", "")
+        timeframe = payload.get("timeframe", "")
 
-            payload = json.loads(body)
+        message = (
+            f"🚨 {side} SIGNAL\n\n"
+            f"Pair: {symbol}\n"
+            f"Timeframe: {timeframe}\n\n"
+            f"Entry: {entry}\n"
+            f"Stop Loss: {sl}\n"
+            f"Take Profit: {tp}"
+        )
 
-            secret = payload.get("secret")
+        telegram_url = (
+            f"https://api.telegram.org/bot"
+            f"{BOT_TOKEN}/sendMessage"
+        )
 
-            if secret != WEBHOOK_SECRET:
-                self.send_response(403)
-                self.end_headers()
-                self.wfile.write(
-                    b'{"status":"forbidden"}'
-                )
-                return
+        requests.post(
+            telegram_url,
+            json={
+                "chat_id": CHAT_ID,
+                "text": message
+            },
+            timeout=15
+        )
 
-            symbol = payload.get("symbol", "")
-            side = payload.get("side", "")
-            entry = payload.get("entry", "")
-            stop_loss = payload.get("sl", "")
-            take_profit = payload.get("tp", "")
-            timeframe = payload.get("timeframe", "")
+        return jsonify({
+            "status": "success"
+        })
 
-            message = (
-                f"🚨 {side} SIGNAL\n\n"
-                f"Pair: {symbol}\n"
-                f"Timeframe: {timeframe}\n\n"
-                f"Entry: {entry}\n"
-                f"Stop Loss: {stop_loss}\n"
-                f"Take Profit: {take_profit}"
-            )
+    except Exception as e:
 
-            telegram_url = (
-                f"https://api.telegram.org/bot"
-                f"{BOT_TOKEN}/sendMessage"
-            )
-
-            requests.post(
-                telegram_url,
-                json={
-                    "chat_id": CHAT_ID,
-                    "text": message
-                },
-                timeout=15
-            )
-
-            self.send_response(200)
-            self.end_headers()
-
-            self.wfile.write(
-                b'{"status":"success"}'
-            )
-
-        except Exception as e:
-
-            self.send_response(500)
-            self.end_headers()
-
-            self.wfile.write(
-                str(e).encode()
-            )
+        return jsonify({
+            "status": "error",
+            "message": str(e)
+        }), 500
