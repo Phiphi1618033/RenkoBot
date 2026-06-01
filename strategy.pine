@@ -1,0 +1,749 @@
+//@version=6
+strategy("HTF Renko Projection Strategy (5m / 15m / 30m) on 1m", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500, pyramiding=0, process_orders_on_close=true)
+
+//=====================================================================
+// INPUTS
+//=====================================================================
+
+htfTf = input.timeframe(
+     "15", // m15 Recommended- together with m1. Never enter trades when m1 price is inside ATR Renko brick. (Sideways market)
+     "Higher Timeframe Renko",
+     options = ["5", "15", "30"])
+
+renkoMethod = input.string(
+     "ATR", //ATR recommended
+     "Renko Method",
+     options = ["ATR", "Traditional"])
+
+atrLength = input.int(
+     14,
+     "ATR Length",
+     minval = 1)
+
+brickSize = input.float(
+     10.0,
+     "Traditional Brick Size",
+     minval = 0.0001)
+
+// NEW: User selectable Renko brick count after reversal
+signalBrickCount = input.int(
+     1, // 1- Recommended for catching early and quicker 1:1.5 RR.
+     "Signal Renko Brick Number After Color Change",
+     minval = 1,
+     tooltip = "1 = first brick after reversal, 2 = second brick after reversal, 3 = third brick after reversal, etc.")
+
+showWicks = input.bool(
+     true,
+     "Show Wicks")
+
+bullColor = input.color(
+     color.lime,
+     "Bull Candle Color")
+
+bearColor = input.color(
+     color.red,
+     "Bear Candle Color")
+
+// NEW: Risk / Reward box controls
+stopLossBufferPoints = input.float(
+     3.0,
+     "Stop Loss Buffer (Points)",
+     minval = 0.0,
+     step = 0.1,
+     tooltip = "Buy stop = selected Renko low minus this value. Sell stop = selected Renko high plus this value.")
+
+takeProfitBrickMultiplier = input.float(
+     1.6,
+     "Take Profit Brick Multiplier",
+     minval = 0.1,
+     step = 0.1,
+     tooltip = "Reward distance in Renko brick units. Default = 2 bricks.")
+
+boxSpanBars = input.int(
+     100,
+     "Trade Box Span Forward (Bars)",
+     minval = 1,
+     tooltip = "How many bars forward the risk/reward boxes should extend.")
+
+maxHistoricalBoxesInput = input.int(
+     40,
+     "Max Historical Trade Boxes To Keep",
+     minval = 2,
+     tooltip = "Each signal creates 2 boxes: Risk and Reward.")
+
+// Force even number so risk/reward pairs stay tidy
+maxHistoricalBoxes = math.max(2, maxHistoricalBoxesInput - (maxHistoricalBoxesInput % 2))
+
+//=====================================================================
+// DASHBOARD INPUTS
+//=====================================================================
+
+showDashboard = input.bool(
+     true,
+     "Show Performance Dashboard",
+     group = "Dashboard")
+
+dashboardPeriod = input.string(
+     "All Time",
+     "Dashboard Time Period",
+     options = ["Today", "Last 24 Hours", "Last 7 Days", "Last 30 Days", "Last 90 Days", "Year To Date", "All Time"],
+     group = "Dashboard")
+
+dashboardPosition = input.string(
+     "Top Right",
+     "Dashboard Position",
+     options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left", "Middle Right", "Middle Left"],
+     group = "Dashboard")
+
+dashboardTextSize = input.string(
+     "Normal",
+     "Dashboard Text Size",
+     options = ["Tiny", "Small", "Normal", "Large", "Huge"],
+     group = "Dashboard")
+
+markerSize = input.string(
+     "Large",
+     "Trade Result Marker Size",
+     options = ["Tiny", "Small", "Normal", "Large", "Huge"],
+     group = "Dashboard")
+
+//=====================================================================
+// CREATE RENKO TICKER
+//=====================================================================
+
+string renkoTicker =
+     renkoMethod == "ATR"
+     ? ticker.renko(syminfo.tickerid, "ATR", atrLength)
+     : ticker.renko(syminfo.tickerid, "Traditional", brickSize)
+
+//=====================================================================
+// REQUEST HTF RENKO OHLC
+//=====================================================================
+
+rOpen = request.security(
+     renkoTicker,
+     htfTf,
+     open,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+rHigh = request.security(
+     renkoTicker,
+     htfTf,
+     high,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+rLow = request.security(
+     renkoTicker,
+     htfTf,
+     low,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+rClose = request.security(
+     renkoTicker,
+     htfTf,
+     close,
+     gaps = barmerge.gaps_off,
+     lookahead = barmerge.lookahead_off)
+
+//=====================================================================
+// DETERMINE CANDLE DIRECTION
+//=====================================================================
+
+isBull = rClose >= rOpen
+
+bodyColor =
+     isBull
+     ? bullColor
+     : bearColor
+
+wickColor = bodyColor
+borderColor = bodyColor
+
+//=====================================================================
+// PLOT PROJECTED RENKO CANDLES
+//=====================================================================
+
+plotcandle(
+     rOpen,
+     rHigh,
+     rLow,
+     rClose,
+     title = "Projected HTF Renko",
+     color = bodyColor,
+     wickcolor = showWicks ? wickColor : color.new(wickColor, 100),
+     bordercolor = borderColor)
+
+//=====================================================================
+// OPTIONAL TREND STATE
+//=====================================================================
+
+trend =
+     isBull ? 1 : -1
+
+bgcolor(
+     trend == 1
+     ? color.new(color.green, 75)
+     : color.new(color.red, 75),
+     title = "Trend Background")
+
+//=====================================================================
+// DETECT NEW RENKO BRICKS
+//=====================================================================
+
+newBrick =
+     ta.change(rOpen) != 0 or
+     ta.change(rClose) != 0
+
+bullBrick =
+     newBrick and isBull
+
+bearBrick =
+     newBrick and not isBull
+
+plotshape(
+     bullBrick,
+     title = "Bull Renko Brick",
+     style = shape.triangleup,
+     location = location.belowbar,
+     color = color.lime,
+     size = size.small)
+
+plotshape(
+     bearBrick,
+     title = "Bear Renko Brick",
+     style = shape.triangledown,
+     location = location.abovebar,
+     color = color.red,
+     size = size.small)
+
+//=====================================================================
+// TRACK CONSECUTIVE RENKO BRICKS + REVERSALS
+//=====================================================================
+
+var int bullCount = 0
+var int bearCount = 0
+var int lastRenkoDir = 0
+
+var bool bullReversalSeen = false
+var bool bearReversalSeen = false
+
+if newBrick
+
+    if isBull
+
+        if lastRenkoDir == -1
+            bullReversalSeen := true
+            bearReversalSeen := false
+
+        bullCount += 1
+        bearCount := 0
+        lastRenkoDir := 1
+
+    else
+
+        if lastRenkoDir == 1
+            bearReversalSeen := true
+            bullReversalSeen := false
+
+        bearCount += 1
+        bullCount := 0
+        lastRenkoDir := -1
+
+//=====================================================================
+// USER SELECTED SIGNAL BRICK
+//=====================================================================
+
+bullSignalBrick =
+     bullBrick and
+     bullReversalSeen and
+     bullCount == signalBrickCount
+
+bearSignalBrick =
+     bearBrick and
+     bearReversalSeen and
+     bearCount == signalBrickCount
+
+//=====================================================================
+// STORE SELECTED BRICK REFERENCE LEVELS
+//=====================================================================
+
+var float bullReferenceClose = na
+var float bullReferenceLow = na
+var float bullReferenceHeight = na
+
+var float bearReferenceClose = na
+var float bearReferenceHigh = na
+var float bearReferenceHeight = na
+
+if bullSignalBrick
+    bullReferenceClose := rClose
+    bullReferenceLow := rLow
+    bullReferenceHeight := math.max(math.abs(rClose - rOpen), syminfo.mintick)
+
+if bearSignalBrick
+    bearReferenceClose := rClose
+    bearReferenceHigh := rHigh
+    bearReferenceHeight := math.max(math.abs(rClose - rOpen), syminfo.mintick)
+
+//=====================================================================
+// ONE-SHOT SIGNAL ARMING
+//=====================================================================
+
+var bool buyArmed = false
+var bool sellArmed = false
+
+if bullSignalBrick
+    buyArmed := true
+    sellArmed := false
+
+if bearSignalBrick
+    sellArmed := true
+    buyArmed := false
+
+//=====================================================================
+// FULL-BODY CANDLE CONDITIONS
+// Entire OHLC must be beyond selected Renko brick close
+//=====================================================================
+
+fullBodyAbove =
+     not na(bullReferenceClose) and
+     open  > bullReferenceClose and
+     high  > bullReferenceClose and
+     low   > bullReferenceClose and
+     close > bullReferenceClose
+
+fullBodyBelow =
+     not na(bearReferenceClose) and
+     open  < bearReferenceClose and
+     high  < bearReferenceClose and
+     low   < bearReferenceClose and
+     close < bearReferenceClose
+
+//=====================================================================
+// ONE-TIME SIGNALS
+//=====================================================================
+
+buySignal =
+     buyArmed and
+     barstate.isconfirmed and
+     fullBodyAbove
+
+sellSignal =
+     sellArmed and
+     barstate.isconfirmed and
+     fullBodyBelow
+
+// Only take actual strategy entries when flat.
+buyTradeSignal = buySignal and strategy.position_size == 0
+sellTradeSignal = sellSignal and strategy.position_size == 0
+
+if buySignal
+    buyArmed := false
+
+if sellSignal
+    sellArmed := false
+
+//=====================================================================
+// HISTORY MANAGEMENT FOR TRADE BOXES
+//=====================================================================
+
+var box[] tradeBoxes = array.new_box()
+
+f_registerBox(box _box) =>
+    array.push(tradeBoxes, _box)
+    while array.size(tradeBoxes) > maxHistoricalBoxes
+        box oldBox = array.shift(tradeBoxes)
+        box.delete(oldBox)
+
+//=====================================================================
+// ACTIVE TRADE TRACKING (for SL/TP outcome resolution + dashboard)
+// Parallel arrays - one entry per open trade.
+//=====================================================================
+
+var int[]   tradeDir         = array.new_int()      // 1 = long, -1 = short
+var float[] tradeEntry       = array.new_float()
+var float[] tradeStop        = array.new_float()
+var float[] tradeTarget      = array.new_float()
+var int[]   tradeEntryTime   = array.new_int()      // bar time of entry
+var int[]   tradeEntryBar    = array.new_int()      // bar_index of entry
+var box[]   tradeRiskBoxes   = array.new_box()      // for marker placement
+var box[]   tradeRewardBoxes = array.new_box()
+
+// Completed trade history (for dashboard filtering)
+var int[]  resultTimes   = array.new_int()   // closing bar time
+var bool[] resultWins    = array.new_bool()  // true = TP hit, false = SL hit
+
+//=====================================================================
+// RISK / REWARD BOX DRAWING
+// - Entry = close of signal candle (same price as open of next entry candle)
+// - Boxes span forward by user-defined number of bars
+//=====================================================================
+
+if buyTradeSignal and not na(bullReferenceLow) and not na(bullReferenceHeight)
+
+    float buyEntryPrice = close
+    float buyStopPrice = bullReferenceLow - stopLossBufferPoints
+    float buyTargetPrice = buyEntryPrice + (bullReferenceHeight * takeProfitBrickMultiplier)
+
+    // Strategy entry and exit
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", from_entry="Long", stop=buyStopPrice, limit=buyTargetPrice)
+
+    // Risk box
+    box buyRiskBox = box.new(
+         left = bar_index,
+         top = buyEntryPrice,
+         right = bar_index + boxSpanBars,
+         bottom = buyStopPrice,
+         xloc = xloc.bar_index,
+         extend = extend.none,
+         border_color = color.new(color.red, 0),
+         bgcolor = color.new(color.red, 85),
+         text = "Risk",
+         text_color = color.white,
+         text_size = size.small)
+
+    // Reward box
+    box buyRewardBox = box.new(
+         left = bar_index,
+         top = buyTargetPrice,
+         right = bar_index + boxSpanBars,
+         bottom = buyEntryPrice,
+         xloc = xloc.bar_index,
+         extend = extend.none,
+         border_color = color.new(color.green, 0),
+         bgcolor = color.new(color.green, 85),
+         text = "Reward",
+         text_color = color.white,
+         text_size = size.small)
+
+    f_registerBox(buyRiskBox)
+    f_registerBox(buyRewardBox)
+
+    // Register active trade
+    array.push(tradeDir, 1)
+    array.push(tradeEntry, buyEntryPrice)
+    array.push(tradeStop, buyStopPrice)
+    array.push(tradeTarget, buyTargetPrice)
+    array.push(tradeEntryTime, time)
+    array.push(tradeEntryBar, bar_index)
+    array.push(tradeRiskBoxes, buyRiskBox)
+    array.push(tradeRewardBoxes, buyRewardBox)
+
+if sellTradeSignal and not na(bearReferenceHigh) and not na(bearReferenceHeight)
+
+    float sellEntryPrice = close
+    float sellStopPrice = bearReferenceHigh + stopLossBufferPoints
+    float sellTargetPrice = sellEntryPrice - (bearReferenceHeight * takeProfitBrickMultiplier)
+
+    // Strategy entry and exit
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", from_entry="Short", stop=sellStopPrice, limit=sellTargetPrice)
+
+    // Reward box
+    box sellRewardBox = box.new(
+         left = bar_index,
+         top = sellEntryPrice,
+         right = bar_index + boxSpanBars,
+         bottom = sellTargetPrice,
+         xloc = xloc.bar_index,
+         extend = extend.none,
+         border_color = color.new(color.green, 0),
+         bgcolor = color.new(color.green, 85),
+         text = "Reward",
+         text_color = color.white,
+         text_size = size.small)
+
+    // Risk box
+    box sellRiskBox = box.new(
+         left = bar_index,
+         top = sellStopPrice,
+         right = bar_index + boxSpanBars,
+         bottom = sellEntryPrice,
+         xloc = xloc.bar_index,
+         extend = extend.none,
+         border_color = color.new(color.red, 0),
+         bgcolor = color.new(color.red, 85),
+         text = "Risk",
+         text_color = color.white,
+         text_size = size.small)
+
+    f_registerBox(sellRewardBox)
+    f_registerBox(sellRiskBox)
+
+    // Register active trade
+    array.push(tradeDir, -1)
+    array.push(tradeEntry, sellEntryPrice)
+    array.push(tradeStop, sellStopPrice)
+    array.push(tradeTarget, sellTargetPrice)
+    array.push(tradeEntryTime, time)
+    array.push(tradeEntryBar, bar_index)
+    array.push(tradeRiskBoxes, sellRiskBox)
+    array.push(tradeRewardBoxes, sellRewardBox)
+
+//=====================================================================
+// HELPER: marker size conversion
+//=====================================================================
+
+f_size(string s) =>
+    s == "Tiny" ? size.tiny :
+     s == "Small" ? size.small :
+     s == "Normal" ? size.normal :
+     s == "Large" ? size.large :
+     size.huge
+
+//=====================================================================
+// RESOLVE OPEN TRADES - CHECK SL / TP HITS
+// Iterate backwards so we can safely remove resolved trades.
+//=====================================================================
+
+if array.size(tradeDir) > 0
+    for i = array.size(tradeDir) - 1 to 0
+        int    dir       = array.get(tradeDir, i)
+        float  entryP    = array.get(tradeEntry, i)
+        float  stopP     = array.get(tradeStop, i)
+        float  targetP   = array.get(tradeTarget, i)
+        int    entryBar  = array.get(tradeEntryBar, i)
+        box    riskBx    = array.get(tradeRiskBoxes, i)
+        box    rewardBx  = array.get(tradeRewardBoxes, i)
+
+        // Only evaluate bars AFTER the entry bar
+        if bar_index > entryBar
+            bool tpHit = false
+            bool slHit = false
+
+            if dir == 1
+                // Long: TP if high >= target, SL if low <= stop
+                tpHit := high >= targetP
+                slHit := low  <= stopP
+            else
+                // Short: TP if low <= target, SL if high >= stop
+                tpHit := low  <= targetP
+                slHit := high >= stopP
+
+            // If both occur on same bar, resolve conservatively as SL hit
+            bool resolved = false
+            bool wasWin = false
+
+            if slHit and not tpHit
+                resolved := true
+                wasWin := false
+            else if tpHit and not slHit
+                resolved := true
+                wasWin := true
+            else if tpHit and slHit
+                // Ambiguous - assume worst case (SL first)
+                resolved := true
+                wasWin := false
+
+            if resolved
+                // Place marker label centered on the appropriate box
+                box markerBox = wasWin ? rewardBx : riskBx
+                int leftX = box.get_left(markerBox)
+                int rightX = box.get_right(markerBox)
+                float topY = box.get_top(markerBox)
+                float botY = box.get_bottom(markerBox)
+                int   midX = math.round((leftX + rightX) / 2)
+                float midY = (topY + botY) / 2
+
+                label.new(
+                     x = midX,
+                     y = midY,
+                     text = wasWin ? "✓" : "✗",
+                     xloc = xloc.bar_index,
+                     style = label.style_none,
+                     textcolor = wasWin ? color.lime : color.red,
+                     size = f_size(markerSize))
+
+                // Record result for dashboard
+                array.push(resultTimes, time)
+                array.push(resultWins, wasWin)
+
+                // Remove from active arrays
+                array.remove(tradeDir, i)
+                array.remove(tradeEntry, i)
+                array.remove(tradeStop, i)
+                array.remove(tradeTarget, i)
+                array.remove(tradeEntryTime, i)
+                array.remove(tradeEntryBar, i)
+                array.remove(tradeRiskBoxes, i)
+                array.remove(tradeRewardBoxes, i)
+
+//=====================================================================
+// BUY / SELL LABELS
+//=====================================================================
+
+if buyTradeSignal
+    label.new(
+         bar_index,
+         low,
+         "BUY",
+         style = label.style_label_up,
+         color = color.lime,
+         textcolor = color.black,
+         size = size.small)
+
+if sellTradeSignal
+    label.new(
+         bar_index,
+         high,
+         "SELL",
+         style = label.style_label_down,
+         color = color.red,
+         textcolor = color.white,
+         size = size.small)
+
+//=====================================================================
+// DASHBOARD
+//=====================================================================
+
+f_periodStart(string p) =>
+    int ms = na
+    if p == "Today"
+        ms := timestamp(year, month, dayofmonth, 0, 0, 0)
+    else if p == "Last 24 Hours"
+        ms := timenow - 24 * 60 * 60 * 1000
+    else if p == "Last 7 Days"
+        ms := timenow - 7 * 24 * 60 * 60 * 1000
+    else if p == "Last 30 Days"
+        ms := timenow - 30 * 24 * 60 * 60 * 1000
+    else if p == "Last 90 Days"
+        ms := timenow - 90 * 24 * 60 * 60 * 1000
+    else if p == "Year To Date"
+        ms := timestamp(year, 1, 1, 0, 0, 0)
+    else
+        ms := 0
+    ms
+
+f_dashPos(string p) =>
+    p == "Top Right"     ? position.top_right :
+     p == "Top Left"      ? position.top_left :
+     p == "Bottom Right"  ? position.bottom_right :
+     p == "Bottom Left"   ? position.bottom_left :
+     p == "Middle Right"  ? position.middle_right :
+     position.middle_left
+
+f_dashTextSize(string s) =>
+    s == "Tiny" ? size.tiny :
+     s == "Small" ? size.small :
+     s == "Normal" ? size.normal :
+     s == "Large" ? size.large :
+     size.huge
+
+var table dashboard = na
+
+if showDashboard and barstate.islast
+
+    if not na(dashboard)
+        table.delete(dashboard)
+
+    int periodStart = f_periodStart(dashboardPeriod)
+
+    int wins = 0
+    int losses = 0
+
+    if array.size(resultTimes) > 0
+        for i = 0 to array.size(resultTimes) - 1
+            int t = array.get(resultTimes, i)
+            if t >= periodStart
+                if array.get(resultWins, i)
+                    wins += 1
+                else
+                    losses += 1
+
+    int total = wins + losses
+    float winRate = total > 0 ? (wins / total) * 100.0 : 0.0
+
+    dashboard := table.new(
+         position = f_dashPos(dashboardPosition),
+         columns = 2,
+         rows = 5,
+         bgcolor = color.new(color.black, 20),
+         border_color = color.new(color.gray, 40),
+         border_width = 1,
+         frame_color = color.new(color.gray, 40),
+         frame_width = 1)
+
+    table.cell(dashboard, 0, 0, "Renko Performance",
+         text_color = color.white,
+         bgcolor = color.new(color.blue, 30),
+         text_size = f_dashTextSize(dashboardTextSize))
+    table.cell(dashboard, 1, 0, dashboardPeriod,
+         text_color = color.white,
+         bgcolor = color.new(color.blue, 30),
+         text_size = f_dashTextSize(dashboardTextSize))
+
+    table.cell(dashboard, 0, 1, "✓ Wins",
+         text_color = color.white,
+         text_size = f_dashTextSize(dashboardTextSize))
+    table.cell(dashboard, 1, 1, str.tostring(wins),
+         text_color = color.lime,
+         text_size = f_dashTextSize(dashboardTextSize))
+
+    table.cell(dashboard, 0, 2, "✗ Losses",
+         text_color = color.white,
+         text_size = f_dashTextSize(dashboardTextSize))
+    table.cell(dashboard, 1, 2, str.tostring(losses),
+         text_color = color.red,
+         text_size = f_dashTextSize(dashboardTextSize))
+
+    table.cell(dashboard, 0, 3, "Total Trades",
+         text_color = color.white,
+         text_size = f_dashTextSize(dashboardTextSize))
+    table.cell(dashboard, 1, 3, str.tostring(total),
+         text_color = color.white,
+         text_size = f_dashTextSize(dashboardTextSize))
+
+    color wrColor = winRate >= 50 ? color.lime : winRate > 0 ? color.orange : color.red
+    table.cell(dashboard, 0, 4, "Win Rate",
+         text_color = color.white,
+         text_size = f_dashTextSize(dashboardTextSize))
+    table.cell(dashboard, 1, 4, str.tostring(winRate, "#.##") + "%",
+         text_color = wrColor,
+         text_size = f_dashTextSize(dashboardTextSize))
+
+//=====================================================================
+// STATS HELPER (for alerts)
+//=====================================================================
+
+f_getStats(int periodStart) =>
+    int w = 0
+    int l = 0
+    if array.size(resultTimes) > 0
+        for i = 0 to array.size(resultTimes) - 1
+            int t = array.get(resultTimes, i)
+            if t >= periodStart
+                if array.get(resultWins, i)
+                    w += 1
+                else
+                    l += 1
+    float wr = (w + l) > 0 ? (w / (w + l)) * 100.0 : 0.0
+    [w, l, w + l, wr]
+
+//=====================================================================
+// ALERTS (sends JSON to webhook)
+//=====================================================================
+
+if (buyTradeSignal or sellTradeSignal) and barstate.isconfirmed
+    int periodStart = f_periodStart(dashboardPeriod)
+    [wins, losses, totalTrades, winRate] = f_getStats(periodStart)
+
+    string signalType = buyTradeSignal ? "BUY" : "SELL"
+    float entryPrice = close
+    float stopPrice = buyTradeSignal ? bullReferenceLow - stopLossBufferPoints : bearReferenceHigh + stopLossBufferPoints
+    float targetPrice = buyTradeSignal ? entryPrice + bullReferenceHeight * takeProfitBrickMultiplier : entryPrice - bearReferenceHeight * takeProfitBrickMultiplier
+
+    string json = '{"ticker":"' + syminfo.ticker + 
+                  '","signal":"' + signalType + 
+                  '","entry":' + str.tostring(entryPrice) +
+                  ',"stopLoss":' + str.tostring(stopPrice) +
+                  ',"takeProfit":' + str.tostring(targetPrice) +
+                  ',"wins":' + str.tostring(wins) +
+                  ',"losses":' + str.tostring(losses) +
+                  ',"winRate":' + str.tostring(winRate, "#.##") +
+                  '}'
+
+    alert(json, alert.freq_once_per_bar_close)
